@@ -181,7 +181,7 @@ cube.display.set_led(0, 0, red)
 If you want to interact with a different LumiCube, create another cube object using the IP address of the other cube.
 You can then access all the fields and methods of the remote cube in the same way:
 
-cube2 = Cube("192.168.0.14")
+cube2 = LumiCube("192.168.0.14")
 cube2.display.set_led(0, 0, red)
 
 Note: It will be communicating over a WiFi network, so the responsiveness will depend on your network speed and reliability.
