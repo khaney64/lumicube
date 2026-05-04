@@ -233,6 +233,7 @@ def run_once(args):
 def run_demo(args):
     columns = []
     index = 0
+    last_leds = None
     while args.steps is None or index < args.steps:
         util, vram, temp = DEFAULT_DEMO_VALUES[index % len(DEFAULT_DEMO_VALUES)]
         index += 1
@@ -245,20 +246,39 @@ def run_demo(args):
             "vram_percent": vram,
         }
         leds = build_leds(columns, vram, temp)
-        send_or_print(args, leds, metrics)
+        if leds != last_leds:
+            send_or_print(args, leds, metrics)
+            last_leds = leds
         time.sleep(args.delay)
 
 
 def run_live(args):
     columns = []
     index = 0
+    last_leds = None
     while args.steps is None or index < args.steps:
         index += 1
         metrics = sample_gpu(args.timeout)
-        append_column(columns, metrics["utilization_pct"])
+        chart_util = metrics["utilization_pct"]
+        if chart_util < args.idle_threshold:
+            chart_util = 0.0
+        append_column(columns, chart_util)
         leds = build_leds(columns, metrics["vram_percent"], metrics["temperature_c"])
-        send_or_print(args, leds, metrics)
+        if leds != last_leds:
+            send_or_print(args, leds, metrics)
+            last_leds = leds
         time.sleep(args.delay)
+
+
+def clear_cube(args):
+    if args.dry_run:
+        print("dry-run: cleared")
+        return
+    try:
+        post_set_leds(args.cube, all_visible_leds(BLACK), args.timeout, args.retries)
+        print(f"cleared {args.cube}")
+    except Exception as exc:
+        print(f"warning: failed to clear {args.cube}: {exc}", file=sys.stderr)
 
 
 def build_parser():
@@ -289,6 +309,13 @@ def build_parser():
     parser.add_argument("--once-util", type=float, help="send one static frame with this GPU utilization percent")
     parser.add_argument("--once-vram", type=float, default=25.0, help="VRAM percent for --once-util")
     parser.add_argument("--once-temp", type=float, default=45.0, help="temperature C for --once-util")
+    parser.add_argument(
+        "--idle-threshold",
+        type=float,
+        default=3.0,
+        help="GPU utilization percent below which the chart treats the sample as 0, "
+             "suppressing scroll-jitter on an idle cube. default: 3",
+    )
     return parser
 
 
@@ -304,13 +331,18 @@ def main(argv=None):
         parser.error("--retries must be 0 or greater")
     if args.steps is not None and args.steps < 1:
         parser.error("--steps must be 1 or greater")
+    if args.idle_threshold < 0:
+        parser.error("--idle-threshold must be 0 or greater")
 
-    if args.once_util is not None:
-        run_once(args)
-    elif args.demo:
-        run_demo(args)
-    else:
-        run_live(args)
+    try:
+        if args.once_util is not None:
+            run_once(args)
+        elif args.demo:
+            run_demo(args)
+        else:
+            run_live(args)
+    except KeyboardInterrupt:
+        clear_cube(args)
 
 
 if __name__ == "__main__":
