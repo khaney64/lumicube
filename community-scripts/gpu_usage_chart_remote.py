@@ -12,6 +12,8 @@ import subprocess
 import sys
 import time
 
+import requests
+
 
 BLACK = 0x000000
 DEFAULT_DEMO_VALUES = [
@@ -173,9 +175,7 @@ def sample_gpu(timeout=5):
     }
 
 
-def post_set_leds(cube, leds, timeout=5, retries=2):
-    import requests
-
+def post_set_leds(cube, leds, timeout=5, retries=4):
     url = f"http://{cube}/api/v1/modules/display/methods/set_leds"
     last_error = None
     for attempt in range(retries + 1):
@@ -187,7 +187,7 @@ def post_set_leds(cube, leds, timeout=5, retries=2):
             last_error = exc
             if attempt >= retries:
                 break
-            time.sleep(0.5)
+            time.sleep(min(2.0, 0.5 * (2 ** attempt)))
     raise last_error
 
 
@@ -205,11 +205,18 @@ def send_or_print(args, leds, metrics):
         f"temp={metrics['temperature_c']:.1f}C"
     )
     if args.dry_run:
-        print(f"dry-run: {metric_text}; {summary}")
-        return
+        if not args.quiet:
+            print(f"dry-run: {metric_text}; {summary}")
+        return True
 
-    post_set_leds(args.cube, leds, args.timeout, args.retries)
-    print(f"sent to {args.cube}: {metric_text}; {summary}")
+    try:
+        post_set_leds(args.cube, leds, args.timeout, args.retries)
+    except requests.RequestException as exc:
+        print(f"warning: send to {args.cube} failed, will retry next frame: {exc}", file=sys.stderr)
+        return False
+    if not args.quiet:
+        print(f"sent to {args.cube}: {metric_text}; {summary}")
+    return True
 
 
 def static_metrics(args):
@@ -247,8 +254,8 @@ def run_demo(args):
         }
         leds = build_leds(columns, vram, temp)
         if leds != last_leds:
-            send_or_print(args, leds, metrics)
-            last_leds = leds
+            if send_or_print(args, leds, metrics):
+                last_leds = leds
         time.sleep(args.delay)
 
 
@@ -265,18 +272,20 @@ def run_live(args):
         append_column(columns, chart_util)
         leds = build_leds(columns, metrics["vram_percent"], metrics["temperature_c"])
         if leds != last_leds:
-            send_or_print(args, leds, metrics)
-            last_leds = leds
+            if send_or_print(args, leds, metrics):
+                last_leds = leds
         time.sleep(args.delay)
 
 
 def clear_cube(args):
     if args.dry_run:
-        print("dry-run: cleared")
+        if not args.quiet:
+            print("dry-run: cleared")
         return
     try:
         post_set_leds(args.cube, all_visible_leds(BLACK), args.timeout, args.retries)
-        print(f"cleared {args.cube}")
+        if not args.quiet:
+            print(f"cleared {args.cube}")
     except Exception as exc:
         print(f"warning: failed to clear {args.cube}: {exc}", file=sys.stderr)
 
@@ -302,8 +311,9 @@ def build_parser():
         help="seconds between display updates, default: 5",
     )
     parser.add_argument("--timeout", type=float, default=5.0, help="HTTP/nvidia-smi timeout in seconds")
-    parser.add_argument("--retries", type=int, default=2, help="REST retries per frame")
+    parser.add_argument("--retries", type=int, default=4, help="REST retries per frame")
     parser.add_argument("--dry-run", action="store_true", help="print frame summaries without sending to cube")
+    parser.add_argument("--quiet", action="store_true", help="suppress per-frame stdout (warnings still go to stderr)")
     parser.add_argument("--demo", action="store_true", help="use synthetic values instead of nvidia-smi")
     parser.add_argument("--steps", type=int, help="number of frames to send before exiting")
     parser.add_argument("--once-util", type=float, help="send one static frame with this GPU utilization percent")
